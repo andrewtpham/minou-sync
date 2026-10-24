@@ -1,0 +1,24 @@
+# Strava's activities.csv, for importing a Strava CSV through `minou-sync import --source <name>`. The full
+# Strava account archive (zip or folder, with original files) still goes through `minou-sync import-strava`,
+# which keeps every repeated column; this profile reads the metric columns a plain CSV exposes.
+
+kind = "activities"
+date_format = "%b %d, %Y, %I:%M:%S %p"   # "Oct 7, 2026, 6:30:00 AM", in UTC
+timezone = "utc"
+required = ["Activity Type", "Activity Date"]
+
+[columns]
+source_id = "Activity ID"
+activity_type = "Activity Type"
+name = "Activity Name"
+start_time = "Activity Date"
+elapsed_s = "Elapsed Time"
+moving_s = "Moving Time"
+distance_m = "Distance"
+elev_gain_m = "Elevation Gain"
+avg_hr = "Average Heart Rate"
+max_hr = "Max Heart Rate"
+avg_watts = "Average Watts"
+calories = "Calories"
+
+[units]

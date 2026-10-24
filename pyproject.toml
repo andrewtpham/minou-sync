@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minou-sync"
+version = "0.1.0"
+description = "Your Garmin and Strava history and daily Garmin wellness in one local SQLite archive, with an MCP server for agents"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Andrew Pham" }]
+keywords = ["garmin", "garmin-connect", "strava", "fit", "sqlite", "mcp", "training", "wellness"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+]
+# Exact pins: minou-sync is an application installed into its own environment (pipx), so pinning costs users
+# nothing and keeps every install on the versions that were tested.
+dependencies = [
+    # Matches the community Garmin MCP's pin. READ_ONLY_CALLS in garmin.py was checked against this version's
+    # source, so bump it only after re-checking that every allowed method still only reads.
+    "garminconnect==0.3.2",
+    "fitparse==1.2.0",
+    # Official MCP SDK (FastMCP). From 1.23, FastMCP on 127.0.0.1 enables DNS-rebinding protection by default
+    # (CVE-2025-66416). The 1.x line; the separate fastmcp 2.x package isn't used.
+    "mcp==1.30.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/andrewtpham/minou-sync"
+Documentation = "https://github.com/andrewtpham/minou-sync/blob/main/docs/getting-started.md"
+Issues = "https://github.com/andrewtpham/minou-sync/issues"
+
+[project.scripts]
+minou-sync = "minou_sync.cli:main"
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "hypothesis==6.170.2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+minou_sync = ["schema.sql", "profiles/*.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

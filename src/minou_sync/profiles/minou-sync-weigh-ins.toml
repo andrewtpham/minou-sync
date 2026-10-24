@@ -1,0 +1,15 @@
+# minou-sync's weigh-in CSV template. See docs/import.md.
+
+kind = "weigh_ins"
+date_format = "iso"
+timezone = "utc"
+required = ["measured_at", "weight_kg"]
+
+[columns]
+measured_utc = "measured_at"
+weight_kg = "weight_kg"
+body_fat_pct = "body_fat_pct"
+muscle_mass_kg = "muscle_mass_kg"
+body_water_pct = "body_water_pct"
+
+[units]

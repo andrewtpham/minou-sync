@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Test and tool caches
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+
+# Personal data. minou-sync keeps its data folder outside the repo (~/.local/share/minou-sync by default);
+# these stop an archive or activity file from being committed if one ends up here anyway.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.fit
+*.fit.gz
+*.gpx
+*.tcx

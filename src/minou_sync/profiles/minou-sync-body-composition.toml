@@ -1,0 +1,17 @@
+# minou-sync's body-composition CSV template (BIA or DEXA). See docs/import.md.
+
+kind = "body_composition"
+date_format = "iso"
+timezone = "utc"
+required = ["measured_on", "method"]
+
+[columns]
+measured_on = "measured_on"
+method = "method"
+weight_kg = "weight_kg"
+body_fat_pct = "body_fat_pct"
+lean_mass_kg = "lean_mass_kg"
+bone_mass_kg = "bone_mass_kg"
+visceral_fat = "visceral_fat"
+
+[units]

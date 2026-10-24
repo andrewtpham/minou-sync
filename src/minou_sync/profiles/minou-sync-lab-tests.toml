@@ -1,0 +1,21 @@
+# minou-sync's lactate-threshold test CSV template. One row per test; stages aren't imported from CSV yet.
+# See docs/import.md.
+
+kind = "lab_tests"
+date_format = "iso"
+timezone = "utc"
+required = ["tested_on"]
+
+[columns]
+tested_on = "tested_on"
+sport = "sport"
+protocol = "protocol"
+lt1_hr = "lt1_hr"
+lt1_pace_s_per_km = "lt1_pace_s_per_km"
+lt1_watts = "lt1_watts"
+lt2_hr = "lt2_hr"
+lt2_pace_s_per_km = "lt2_pace_s_per_km"
+lt2_watts = "lt2_watts"
+notes = "notes"
+
+[units]

@@ -1,0 +1,30 @@
+# minou-sync's own activity CSV template. See docs/import.md for the full column list.
+# A profile maps CSV column names to minou-sync fields, names the required columns, converts units to the
+# base units (metres, seconds, kg) and gives the date format. detect_kind matches a file to a profile by its
+# header when --profile isn't given.
+
+kind = "activities"
+# Date parsing: "iso" uses datetime.fromisoformat; otherwise this is a strptime format.
+date_format = "iso"
+# How to read a naive (offset-less) datetime: "utc" or "local".
+timezone = "utc"
+# Columns that must be present, or the file is rejected before any write.
+required = ["type", "start_time"]
+
+# minou-sync field = CSV column name. Only the fields present are read; the rest are stored as NULL.
+[columns]
+source_id = "id"
+activity_type = "type"
+name = "name"
+start_time = "start_time"
+elapsed_s = "elapsed_s"
+moving_s = "moving_s"
+distance_m = "distance_m"
+elev_gain_m = "elev_gain_m"
+avg_hr = "avg_hr"
+max_hr = "max_hr"
+avg_watts = "avg_watts"
+calories = "calories"
+
+# minou-sync field = multiplier applied to the CSV number to reach the base unit. Absent = no conversion.
+[units]

@@ -1,0 +1,21 @@
+# minou-sync's daily wellness CSV template. One row per local date. See docs/import.md.
+
+kind = "wellness"
+date_format = "iso"
+timezone = "utc"
+required = ["date"]
+
+[columns]
+date = "date"
+resting_hr = "resting_hr"
+hrv_avg_ms = "hrv_avg_ms"
+hrv_status = "hrv_status"
+sleep_s = "sleep_s"
+sleep_score = "sleep_score"
+body_battery_high = "body_battery_high"
+body_battery_low = "body_battery_low"
+stress_avg = "stress_avg"
+steps = "steps"
+readiness_score = "readiness_score"
+
+[units]
