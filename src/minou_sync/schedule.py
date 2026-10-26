@@ -30,22 +30,25 @@ class Job:
     hour: int
     minute: int
     notify: str
+    readiness: bool = False  # the daily readiness note (sync --readiness)
 
 
-def sync_command(data_dir: Path, python: str = sys.executable, notify: str | None = None) -> list[str]:
+def sync_command(data_dir: Path, python: str = sys.executable, notify: str | None = None,
+                 readiness: bool = False) -> list[str]:
     # This install's own python (a venv or the pipx environment), so the job runs it without relying on launchd's PATH.
     # sync posts its own notifications (notify.py), since only it knows what arrived.
-    return [python, "-m", "minou_sync", "--data-dir", str(data_dir), "sync", *(["--notify", notify] if notify else [])]
+    return [python, "-m", "minou_sync", "--data-dir", str(data_dir), "sync", *(["--notify", notify] if notify else []),
+            *(["--readiness"] if readiness else [])]
 
 
 def script(data_dir: Path, python: str = sys.executable, wait_s: int = OFFLINE_WAIT_S,
-           notify: str = DEFAULT_NOTIFY) -> str:
+           notify: str = DEFAULT_NOTIFY, readiness: bool = False) -> str:
     """The shell script launchd runs: a dated log line, then sync, retried while offline."""
     return "\n".join([
         'echo "--- $(date)"',
         "n=0",
         "while :; do",
-        f"  {shlex.join(sync_command(data_dir, python, notify))}",
+        f"  {shlex.join(sync_command(data_dir, python, notify, readiness))}",
         "  code=$?",
         "  n=$((n + 1))",
         f"  [ $code -eq 3 ] && [ $n -le {OFFLINE_RETRIES} ] || break",
@@ -55,11 +58,12 @@ def script(data_dir: Path, python: str = sys.executable, wait_s: int = OFFLINE_W
     ])
 
 
-def plist(data_dir: Path, hour: int, minute: int, notify: str = DEFAULT_NOTIFY, python: str = sys.executable) -> bytes:
+def plist(data_dir: Path, hour: int, minute: int, notify: str = DEFAULT_NOTIFY, python: str = sys.executable,
+          readiness: bool = False) -> bytes:
     log = str(data_dir / LOG_NAME)
     return plistlib.dumps({
         "Label": LABEL,
-        "ProgramArguments": ["/bin/sh", "-c", script(data_dir, python, notify=notify)],
+        "ProgramArguments": ["/bin/sh", "-c", script(data_dir, python, notify=notify, readiness=readiness)],
         "StartCalendarInterval": {"Hour": hour, "Minute": minute},
         "StandardOutPath": log,
         "StandardErrorPath": log,
@@ -77,7 +81,7 @@ def _launchctl(*args: str, check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(["launchctl", *args], capture_output=True, text=True, check=check)
 
 
-def install(data_dir: Path, hour: int, minute: int, notify: str = DEFAULT_NOTIFY) -> Path:
+def install(data_dir: Path, hour: int, minute: int, notify: str = DEFAULT_NOTIFY, readiness: bool = False) -> Path:
     """Write the agent and load it, replacing an earlier one. Raises CalledProcessError if launchctl refuses."""
     data_dir = data_dir.resolve()
     logs = (data_dir / LOG_NAME).parent
@@ -88,7 +92,7 @@ def install(data_dir: Path, hour: int, minute: int, notify: str = DEFAULT_NOTIFY
     domain = f"gui/{os.getuid()}"
     # Fails when nothing is loaded yet, which is fine.
     _launchctl("bootout", f"{domain}/{LABEL}")
-    path.write_bytes(plist(data_dir, hour, minute, notify))
+    path.write_bytes(plist(data_dir, hour, minute, notify, readiness=readiness))
     _launchctl("bootstrap", domain, str(path), check=True)
     return path
 
@@ -104,15 +108,16 @@ def remove() -> bool:
 
 
 def installed() -> Job | None:
-    """The installed agent's time and notification level, or None if there isn't one."""
+    """The installed agent's time, notification level and readiness note, or None if there isn't one."""
     try:
         agent = plistlib.loads((agents_dir() / f"{LABEL}.plist").read_bytes())
         when = agent["StartCalendarInterval"]
-        level = re.search(r"--notify (\w+)", agent["ProgramArguments"][-1])
+        command = agent["ProgramArguments"][-1]
+        level = re.search(r"--notify (\w+)", command)
     except (FileNotFoundError, plistlib.InvalidFileException, KeyError, IndexError, TypeError):
         return None
     # An agent written before --notify existed notified on errors from its shell script.
-    return Job(when["Hour"], when["Minute"], level.group(1) if level else "errors")
+    return Job(when["Hour"], when["Minute"], level.group(1) if level else "errors", "--readiness" in command)
 
 
 def cron_line(data_dir: Path, hour: int, minute: int, python: str = sys.executable) -> str:

@@ -2,8 +2,9 @@
 
 One command, `minou-sync import <path> --source <name>`, reads a CSV, a folder or a zip. CSVs go through a
 Profile (built in under minou_sync/profiles/, or a file path) that maps columns to minou-sync fields, names
-the required columns, converts units and gives the date format. Original files are read for their start time,
-duration and distance and copied into files/<source>/ in the data folder. Every record is kept as it came in raw_json.
+the required columns, converts units and gives the date format. Original files are read for their summary (see
+parse_original) and copied into files/<source>/ in the data folder. Every record is kept as it came in raw_json.
+Everything is read from local files: an import makes no network requests, so no platform's API limits apply.
 
 Strava's full account archive still goes through import_strava; this is for everything else.
 """
@@ -21,7 +22,7 @@ import tomllib
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
@@ -74,6 +75,14 @@ class OriginalSummary:
     elapsed_s: int | None
     distance_m: float | None
     sport: str | None
+    # Only FIT files carry these; GPX and TCX summaries leave them None.
+    start_local: str | None = None
+    moving_s: int | None = None
+    elev_gain_m: float | None = None
+    avg_hr: int | None = None
+    max_hr: int | None = None
+    avg_watts: float | None = None
+    calories: float | None = None
 
 
 @dataclass
@@ -186,28 +195,112 @@ def _field_value(row: dict[str, str], profile: Profile, field_name: str, counts:
 
 # --- Original files -------------------------------------------------------------------------------------
 
+# FIT (sport, sub_sport) pairs whose sub-sport says more than the sport, as type names types.py knows.
+# Any other pair falls back to the sport alone ("running", "cycling", ...), which types.py also knows.
+_FIT_SUB_SPORTS = {
+    ("running", "trail"): "trail running",
+    ("running", "track"): "track running",
+    ("running", "treadmill"): "treadmill running",
+    ("running", "indoor_running"): "indoor running",
+    ("running", "virtual_activity"): "virtual run",
+    ("cycling", "road"): "road biking",
+    ("cycling", "indoor_cycling"): "indoor cycling",
+    ("cycling", "spin"): "indoor cycling",
+    ("cycling", "virtual_activity"): "virtual ride",
+    ("cycling", "mountain"): "mountain biking",
+    ("cycling", "gravel_cycling"): "gravel cycling",
+    ("cycling", "cyclocross"): "gravel cycling",
+    ("cycling", "e_bike_fitness"): "e-bike ride",
+    ("swimming", "lap_swimming"): "lap swimming",
+    ("swimming", "open_water"): "open water swimming",
+    ("training", "strength_training"): "strength training",
+    ("training", "cardio_training"): "cardio",
+    ("training", "yoga"): "yoga",
+    ("training", "pilates"): "pilates",
+    ("training", "flexibility_training"): "mobility",
+    ("fitness_equipment", "indoor_rowing"): "indoor rowing",
+    ("fitness_equipment", "elliptical"): "elliptical",
+    ("fitness_equipment", "stair_climbing"): "stair climbing",
+    ("fitness_equipment", "treadmill"): "treadmill running",
+    ("fitness_equipment", "indoor_cycling"): "indoor cycling",
+}
+
+
+def _fit_type(sport: Any, sub_sport: Any) -> str | None:
+    """The activity type for a FIT sport and sub-sport. fitparse gives a name, or a number it doesn't know."""
+    if sport is None:
+        return None
+    return _FIT_SUB_SPORTS.get((str(sport), str(sub_sport)), str(sport))
+
+
+def _fit_naive_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+def _fit_total(sessions: list[dict[str, Any]], name: str) -> float | None:
+    values = [s[name] for s in sessions if s.get(name) is not None]
+    return sum(values) if values else None
+
+
+def _fit_weighted(sessions: list[dict[str, Any]], name: str) -> float | None:
+    """A per-session average across sessions, weighted by each session's timer time (multisport legs)."""
+    pairs = [(s[name], s.get("total_timer_time") or 0) for s in sessions if s.get(name) is not None]
+    if not pairs:
+        return None
+    weight = sum(w for _, w in pairs)
+    return sum(v * w for v, w in pairs) / weight if weight else sum(v for v, _ in pairs) / len(pairs)
+
+
+def _fit_local_start(start: datetime, activity: dict[str, Any]) -> str | None:
+    """The local start time, from the offset between the activity message's local and UTC timestamps."""
+    local, utc = activity.get("local_timestamp"), activity.get("timestamp")
+    if not isinstance(local, datetime) or not isinstance(utc, datetime):
+        return None
+    offset_s = (local - _fit_naive_utc(utc)).total_seconds()
+    # Real offsets are whole quarter hours within ±14 h; anything else is a device clock problem, so leave it.
+    quarter_hours = round(offset_s / 900)
+    if abs(offset_s - quarter_hours * 900) > 60 or abs(quarter_hours) > 14 * 4:
+        return None
+    return (start + timedelta(seconds=quarter_hours * 900)).isoformat()
+
+
 def _fit_summary(blob: bytes) -> OriginalSummary | None:
     from fitparse import FitFile, FitParseError
 
     try:
         fit = FitFile(io.BytesIO(blob))
-        session = next((m for m in fit.get_messages("session")), None)
+        messages = [(m.name, {d.name: d.value for d in m}) for m in fit.get_messages(["session", "activity"])]
     except (FitParseError, ValueError, KeyError) as e:
         log.warning("FIT file couldn't be parsed (%s); skipped", e)
         return None
-    if session is None:
+    sessions = sorted((v for name, v in messages if name == "session" and v.get("start_time") is not None),
+                      key=lambda s: _fit_naive_utc(s["start_time"]))
+    if not sessions:
         return None
-    values = {d.name: d.value for d in session}
-    start = values.get("start_time")
-    if start is None:
-        return None
-    start = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
-    elapsed = values.get("total_elapsed_time") or values.get("total_timer_time")
+    activity = next((v for name, v in messages if name == "activity"), {})
+    start = _fit_naive_utc(sessions[0]["start_time"]).replace(microsecond=0)
+
+    # One session per leg in a multisport file (transitions included), so the whole activity spans them all.
+    ends = [_fit_naive_utc(s["start_time"])
+            + timedelta(seconds=s.get("total_elapsed_time") or s.get("total_timer_time") or 0) for s in sessions]
+    elapsed = (max(ends) - start).total_seconds() or None
+    # Garmin writes total_moving_time; most other devices only write the timer time, which excludes pauses.
+    moving = _fit_total(sessions, "total_moving_time") or _fit_total(sessions, "total_timer_time")
+    avg_hr = _fit_weighted(sessions, "avg_heart_rate")
+    max_hrs = [s["max_heart_rate"] for s in sessions if s.get("max_heart_rate") is not None]
+    sport = "multisport" if len(sessions) > 1 else _fit_type(sessions[0].get("sport"), sessions[0].get("sub_sport"))
     return OriginalSummary(
-        start_utc=start.astimezone(timezone.utc).replace(microsecond=0, tzinfo=None).isoformat() + "Z",
+        start_utc=start.isoformat() + "Z",
         elapsed_s=round(elapsed) if elapsed is not None else None,
-        distance_m=values.get("total_distance"),
-        sport=values.get("sport"),
+        distance_m=_fit_total(sessions, "total_distance"),
+        sport=sport,
+        start_local=_fit_local_start(start, activity),
+        moving_s=round(moving) if moving is not None else None,
+        elev_gain_m=_fit_total(sessions, "total_ascent"),
+        avg_hr=round(avg_hr) if avg_hr is not None else None,
+        max_hr=max(max_hrs) if max_hrs else None,
+        avg_watts=_fit_weighted(sessions, "avg_power"),
+        calories=_fit_total(sessions, "total_calories"),
     )
 
 
@@ -254,7 +347,11 @@ def _tcx_summary(blob: bytes) -> OriginalSummary | None:
 
 
 def parse_original(path: Path) -> OriginalSummary | None:
-    """Read start time, duration and distance from a FIT, GPX or TCX file (gzipped or not)."""
+    """Read the summary of a FIT, GPX or TCX file (gzipped or not).
+
+    Every format gives the start time and duration. FIT files also give the sport, distance, moving time,
+    local start, elevation gain, heart rate, power and calories; a multisport FIT file is one activity.
+    """
     name = path.name.lower()
     blob = path.read_bytes()
     if name.endswith(".gz"):
@@ -492,9 +589,10 @@ def _import_original(conn: sqlite3.Connection, path: Path, blob: bytes, source: 
         activity = {
             "source": source, "source_id": source_id,
             "activity_type": summary.sport or "other", "name": None,
-            "start_utc": summary.start_utc, "start_local": None,
-            "elapsed_s": summary.elapsed_s, "moving_s": None, "distance_m": summary.distance_m,
-            "elev_gain_m": None, "avg_hr": None, "max_hr": None, "avg_watts": None, "calories": None,
+            "start_utc": summary.start_utc, "start_local": summary.start_local,
+            "elapsed_s": summary.elapsed_s, "moving_s": summary.moving_s, "distance_m": summary.distance_m,
+            "elev_gain_m": summary.elev_gain_m, "avg_hr": summary.avg_hr, "max_hr": summary.max_hr,
+            "avg_watts": summary.avg_watts, "calories": summary.calories,
             "raw_json": json.dumps({"file": path.name, "sport": summary.sport}, sort_keys=True),
             "imported_utc": now,
         }
@@ -532,7 +630,7 @@ def run(conn: sqlite3.Connection, path: Path, source: str, data_dir: Path, profi
     """Import a CSV, a folder or a zip under the given source name.
 
     CSVs go through a Profile (the named one, or detected from the header). Original FIT/GPX/TCX files are read
-    for start time, duration and distance and copied into files/<source>/ in the data folder. Re-running changes nothing.
+    for their summary (parse_original) and copied into files/<source>/ in the data folder. Re-running changes nothing.
     A CSV missing a required column is rejected before any write.
 
     `progress`, if given, is called with (original_files_done, total) after each original file. Parsing and

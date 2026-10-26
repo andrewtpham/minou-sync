@@ -295,13 +295,24 @@ def _sync_news(conn, before: tuple[set[int], str | None, int]):
     )
 
 
+def _readiness_note(conn, before) -> None:
+    """Post the readiness note when this run brought in a newer Garmin readiness entry than the archive had."""
+    from . import notify, readiness
+
+    now = datetime.now()
+    latest = readiness.latest(conn, now)
+    if latest and (before is None or latest.at > before.at):
+        notify.post(readiness.message(latest, now), title=readiness.TITLE)
+
+
 def _sync(data_dir: Path, days: int | None, full_history: bool = False, wellness_from: date | None = None,
-          notify_level: str = "off") -> int:
-    from . import notify
+          notify_level: str = "off", readiness_note: bool = False) -> int:
+    from . import notify, readiness
 
     conn = db.connect(data_dir)
     db.migrate(conn)
     before = _sync_snapshot(conn)
+    readiness_before = readiness.latest(conn, datetime.now()) if readiness_note else None
     try:
         code, reason = _sync_run(conn, data_dir, days, full_history, wellness_from)
     except Exception as e:
@@ -317,6 +328,9 @@ def _sync(data_dir: Path, days: int | None, full_history: bool = False, wellness
         message = notify.problem_message(code, reason, notify_level)
     if message:
         notify.post(message)
+    # A second notification, after the sync report, so each stays short enough for a banner.
+    if code == 0 and readiness_note:
+        _readiness_note(conn, readiness_before)
     return code
 
 
@@ -328,7 +342,7 @@ def _clock(value: str) -> tuple[int, int]:
     return t.hour, t.minute
 
 
-_NOTIFY_SUMMARY = {"off": "no notifications", "errors": "notifies on errors", "new": "notifies when new data arrives",
+_NOTIFY_SUMMARY = {"off": "no sync notifications", "errors": "notifies on errors", "new": "notifies when new data arrives",
                    "always": "notifies after every run"}
 
 
@@ -338,7 +352,8 @@ def _daily_sync_summary() -> str:
     job = schedule.installed()
     if not job:
         return "off"
-    return f"every day at {job.hour:02d}:{job.minute:02d}, {_NOTIFY_SUMMARY[job.notify]}"
+    return (f"every day at {job.hour:02d}:{job.minute:02d}, {_NOTIFY_SUMMARY[job.notify]}, "
+            f"readiness note {'on' if job.readiness else 'off'}")
 
 
 def _schedule_off() -> int:
@@ -348,10 +363,14 @@ def _schedule_off() -> int:
     return 0
 
 
-def _schedule(data_dir: Path, at: tuple[int, int], notify_level: str) -> int:
+def _schedule(data_dir: Path, at: tuple[int, int] | None, notify_level: str | None,
+              readiness: str | None = None) -> int:
     from . import config, schedule
 
-    hour, minute = at
+    job = schedule.installed() if sys.platform == "darwin" else None
+    hour, minute = at or ((job.hour, job.minute) if job else (9, 0))
+    notify_level = notify_level or (job.notify if job else schedule.DEFAULT_NOTIFY)
+    readiness_note = readiness == "on" if readiness else (job.readiness if job else True)
     if sys.platform != "darwin":
         print("schedule uses launchd, which is macOS only. Add this line with crontab -e instead:", file=sys.stderr)
         print(schedule.cron_line(data_dir, hour, minute), file=sys.stderr)
@@ -359,13 +378,16 @@ def _schedule(data_dir: Path, at: tuple[int, int], notify_level: str) -> int:
     # Creates the data folder owner-only if this runs before the first sync.
     db.connect(data_dir).close()
     try:
-        schedule.install(data_dir, hour, minute, notify_level)
+        schedule.install(data_dir, hour, minute, notify_level, readiness_note)
     except subprocess.CalledProcessError as e:
         print(f"launchctl refused the job: {(e.stderr or '').strip() or e}", file=sys.stderr)
         return 1
     print(f"minou-sync sync will run every day at {hour:02d}:{minute:02d}, or when the Mac wakes if it was asleep "
           f"({_NOTIFY_SUMMARY[notify_level]}).")
-    if notify_level != "off":
+    print("A second notification gives Garmin's readiness and recovery for the day. Turn it off with: "
+          "minou-sync schedule --readiness off" if readiness_note else
+          "The readiness note is off. Turn it on with: minou-sync schedule --readiness on")
+    if notify_level != "off" or readiness_note:
         print("macOS may ask once to allow notifications from Script Editor, which posts them for minou-sync.")
     for warning in config.location_warnings(data_dir):
         print(f"Warning: {warning}", file=sys.stderr)
@@ -492,7 +514,7 @@ def _setup(flag: Path | None, folder: Path | None, move: bool) -> int:
     print(f"Saved: minou-sync keeps its data in {folder} (set in {_tilde(config.config_path())}).")
     job = schedule.installed() if sys.platform == "darwin" else None
     if job and folder != current.path:
-        schedule.install(folder, job.hour, job.minute, job.notify)
+        schedule.install(folder, job.hour, job.minute, job.notify, job.readiness)
         print("The daily sync now uses the new folder.")
     return 0
 
@@ -545,15 +567,20 @@ def main(argv: list[str] | None = None) -> int:
     sync_parser.add_argument("--days", type=_days, help="fetch the last N days (1 to 90) instead of what's new")
     sync_parser.add_argument("--notify", choices=("off", "errors", "new", "always"), default="off",
                              help="desktop notification: on errors, when new data arrived, or always (default off)")
+    sync_parser.add_argument("--readiness", action="store_true",
+                             help="also post a readiness note when Garmin has a new readiness score")
     backfill_parser = sub.add_parser(
         "backfill", help="fetch the whole Garmin history in runs of up to 500 requests; rerun to continue")
     backfill_parser.add_argument("--from", dest="wellness_from", type=date.fromisoformat, metavar="YYYY-MM-DD",
                                  help="also fetch daily data from this date, if it's before the first activity")
     schedule_parser = sub.add_parser("schedule", help="run sync every day (macOS launchd); --off to stop")
-    schedule_parser.add_argument("--at", type=_clock, default="09:00", metavar="HH:MM",
+    # Left out, each keeps what the installed job has, so turning one setting off doesn't reset the others.
+    schedule_parser.add_argument("--at", type=_clock, metavar="HH:MM",
                                  help="local time to run (default 09:00)")
-    schedule_parser.add_argument("--notify", choices=("off", "errors", "new", "always"), default="new",
+    schedule_parser.add_argument("--notify", choices=("off", "errors", "new", "always"),
                                  help="notify when new data arrived (default), on errors only, always, or never")
+    schedule_parser.add_argument("--readiness", choices=("on", "off"),
+                                 help="a second notification with Garmin's readiness and recovery (default on)")
     schedule_parser.add_argument("--off", action="store_true", help="stop the daily sync")
     efforts_parser = sub.add_parser(
         "efforts", help="compute best efforts (fastest distances, best power) from the original files")
@@ -586,11 +613,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "import":
             return _import(data_dir, args.path, args.source, args.profile)
         if args.command == "sync":
-            return _sync(data_dir, args.days, notify_level=args.notify)
+            return _sync(data_dir, args.days, notify_level=args.notify, readiness_note=args.readiness)
         if args.command == "backfill":
             return _sync(data_dir, None, full_history=True, wellness_from=args.wellness_from)
         if args.command == "schedule":
-            return _schedule(data_dir, args.at, args.notify)
+            return _schedule(data_dir, args.at, args.notify, args.readiness)
         if args.command == "efforts":
             return _efforts(data_dir, args.whole)
         if args.command == "export-csv":

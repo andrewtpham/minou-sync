@@ -52,6 +52,11 @@ def test_script_carries_the_notify_level():
     assert "sync --notify off" in schedule.script(Path("/data"), "/venv/bin/python", notify="off")
 
 
+def test_script_carries_the_readiness_note():
+    assert "sync --notify new --readiness" in schedule.script(Path("/data"), "/venv/bin/python", readiness=True)
+    assert "--readiness" not in schedule.script(Path("/data"), "/venv/bin/python")
+
+
 def test_script_retries_while_offline_then_syncs(tmp_path):
     r = _run_script(tmp_path, 3, 3, 0)
     assert r.returncode == 0
@@ -118,7 +123,9 @@ def test_remove_unloads_and_deletes(tmp_path, launchctl):
 def test_installed_reads_the_time_and_notify_level(tmp_path, launchctl):
     assert schedule.installed() is None
     path = schedule.install(tmp_path / "data", 6, 15, "always")
-    assert schedule.installed() == schedule.Job(6, 15, "always")
+    assert schedule.installed() == schedule.Job(6, 15, "always", False)
+    schedule.install(tmp_path / "data", 6, 15, "always", readiness=True)
+    assert schedule.installed() == schedule.Job(6, 15, "always", True)
     path.write_text("not a plist")
     assert schedule.installed() is None
 
@@ -136,7 +143,11 @@ def test_cli_status_shows_the_daily_sync(data_dir, launchctl, capsys):
     assert "Daily sync:         off" in capsys.readouterr().out
     schedule.install(data_dir, 9, 0)
     assert cli.main(["--data-dir", str(data_dir), "status"]) == 0
-    assert "Daily sync:         every day at 09:00, notifies when new data arrives" in capsys.readouterr().out
+    assert ("Daily sync:         every day at 09:00, notifies when new data arrives, readiness note off"
+            in capsys.readouterr().out)
+    schedule.install(data_dir, 9, 0, readiness=True)
+    assert cli.main(["--data-dir", str(data_dir), "status"]) == 0
+    assert "readiness note on" in capsys.readouterr().out
 
 
 def test_tests_cannot_reach_launchctl(tmp_path):
@@ -154,12 +165,23 @@ def test_cron_line(tmp_path):
 def test_cli_schedule_installs_at_the_given_time(data_dir, monkeypatch, capsys):
     got = []
     monkeypatch.setattr(cli.sys, "platform", "darwin")
-    monkeypatch.setattr(schedule, "install", lambda d, h, m, n: got.append((d, h, m, n)))
+    monkeypatch.setattr(schedule, "install", lambda d, h, m, n, r: got.append((d, h, m, n, r)))
     assert cli.main(["--data-dir", str(data_dir), "schedule", "--at", "7:05"]) == 0
-    assert cli.main(["--data-dir", str(data_dir), "schedule", "--notify", "errors"]) == 0
-    assert got == [(data_dir, 7, 5, "new"), (data_dir, 9, 0, "errors")]
+    assert cli.main(["--data-dir", str(data_dir), "schedule", "--notify", "errors", "--readiness", "off"]) == 0
+    assert got == [(data_dir, 7, 5, "new", True), (data_dir, 9, 0, "errors", False)]
     out = capsys.readouterr().out
     assert "every day at 07:05" in out and "notifies when new data arrives" in out
+    assert "--readiness off" in out and "--readiness on" in out
+
+
+def test_cli_schedule_keeps_the_installed_settings_it_isnt_given(data_dir, monkeypatch):
+    got = []
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(schedule, "installed", lambda: schedule.Job(6, 30, "always", True))
+    monkeypatch.setattr(schedule, "install", lambda d, h, m, n, r: got.append((h, m, n, r)))
+    assert cli.main(["--data-dir", str(data_dir), "schedule", "--readiness", "off"]) == 0
+    assert cli.main(["--data-dir", str(data_dir), "schedule", "--at", "08:00"]) == 0
+    assert got == [(6, 30, "always", False), (8, 0, "always", True)]
 
 
 def test_cli_schedule_rejects_a_bad_time(data_dir):
@@ -183,7 +205,7 @@ def test_cli_schedule_without_launchd_prints_a_cron_line(data_dir, monkeypatch, 
 
 def test_cli_schedule_warns_about_a_folder_the_job_cant_read(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli.sys, "platform", "darwin")
-    monkeypatch.setattr(schedule, "install", lambda d, h, m, n: None)
+    monkeypatch.setattr(schedule, "install", lambda d, h, m, n, r: None)
     downloads = tmp_path / "home" / "Downloads" / "minou"
     assert cli.main(["--data-dir", str(downloads), "schedule"]) == 0
     assert "daily sync can't answer" in capsys.readouterr().err

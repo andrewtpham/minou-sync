@@ -42,7 +42,7 @@ _TYPES: dict[str, str] = {
     # Snow
     "resortskiing": "ski", "resortskiingsnowboarding": "ski", "alpineski": "ski", "alpineskiing": "ski",
     "backcountryski": "ski", "backcountryskiing": "ski", "nordicski": "ski", "crosscountryskiing": "ski",
-    "skitouring": "ski", "snowboard": "ski", "snowshoe": "hike", "snowshoeing": "hike",
+    "skitouring": "ski", "snowboard": "ski", "snowboarding": "ski", "snowshoe": "hike", "snowshoeing": "hike",
 }
 
 

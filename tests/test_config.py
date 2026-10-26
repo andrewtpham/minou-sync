@@ -188,10 +188,10 @@ def test_setup_without_a_terminal_needs_a_folder(monkeypatch, capsys):
 def test_setup_repoints_the_daily_sync(tmp_path, monkeypatch):
     installed = []
     monkeypatch.setattr(cli.sys, "platform", "darwin")
-    monkeypatch.setattr(schedule, "installed", lambda: schedule.Job(7, 30, "always"))
-    monkeypatch.setattr(schedule, "install", lambda d, h, m, n: installed.append((d, h, m, n)))
+    monkeypatch.setattr(schedule, "installed", lambda: schedule.Job(7, 30, "always", True))
+    monkeypatch.setattr(schedule, "install", lambda d, h, m, n, r: installed.append((d, h, m, n, r)))
     assert cli.main(["setup", str(tmp_path / "new")]) == 0
-    assert installed == [(tmp_path / "new", 7, 30, "always")]
+    assert installed == [(tmp_path / "new", 7, 30, "always", True)]
 
 
 def test_version(capsys):

@@ -7,33 +7,35 @@ intervals.icu, Nike Run Club, COROS, Polar, Suunto, a spreadsheet of your own, o
 minou-sync import <path> --source <name>
 ```
 
-- `<path>` is a CSV file, a folder, or a zip. A folder or zip can mix activity CSVs and original files.
+- `<path>` is a CSV file, a folder or a zip. A folder or zip can mix activity CSVs and original files.
 - `--source <name>` is a short label for where the data came from, such as `intervals`, `nrc` or `coros`. It
-  tells reconcile which records belong together and lets you set a precedence order later.
+  tells reconcile which records belong together. It also lets you set a precedence order later.
 - `--profile <name-or-path>` picks how to read a CSV. Leave it off and minou-sync matches the file to a
   built-in profile by its columns.
 
-Re-running the same import changes nothing: records already stored are left alone, and files already copied
+Re-running the same import changes nothing. Records already stored are left alone and files already copied
 aren't copied again.
 
 ## What gets read
 
-- **Activity summary CSVs** go through a profile and land in `source_activities`, ready for `reconcile` to
-  merge with your Garmin and Strava history.
-- **Original activity files** (`.fit`, `.gpx`, `.tcx`, gzipped or not) are read for their start time,
-  duration, distance and sport, stored as source activities, and copied into `files/<source>/` in the data folder.
+- **Activity summary CSVs** go through a profile into `source_activities`. `reconcile` then merges them with
+  your Garmin and Strava history.
+- **Original activity files** (`.fit`, `.gpx`, `.tcx`, gzipped or not) are each stored as a source activity
+  and copied into `files/<source>/` in the data folder. Every format gives the start time and duration. A FIT
+  file also gives the sport, distance, moving time, local start time, elevation gain, average and maximum heart
+  rate, average power and calories. A multisport FIT file (a triathlon, say) becomes one activity.
 - **Daily wellness, weigh-in, body-composition and lab-test CSVs** go through their own profiles into
   `daily_wellness`, `weigh_ins`, `body_composition` and `lab_tests`. For a day Garmin already covers, Garmin's
   wellness row wins. An imported row only fills a date Garmin doesn't have.
 
-A CSV missing a column the profile needs is rejected before anything is written, and the message names the
+A CSV missing a column the profile needs is rejected before anything is written. The message names the
 column. A value that isn't a number is stored as empty (NULL) and counted in the summary.
 
 ## Profiles
 
-A profile is a small TOML file that maps one platform's CSV columns to minou-sync's fields, says which columns
-must be present, converts units to minou-sync's base units (metres, seconds, kilograms) and gives the date
-format. Adding a platform takes a profile and no code.
+A profile is a small TOML file that maps one platform's CSV columns to minou-sync's fields. It says which
+columns must be present, converts units to minou-sync's base units (metres, seconds, kilograms) and gives the
+date format. Adding a platform takes a profile and no code.
 
 Built-in profiles:
 
@@ -67,7 +69,7 @@ To import with your own profile, pass its path: `--profile ./my-platform.toml`.
 
 ## CSV templates
 
-If you keep records in a spreadsheet, use these column names and the matching built-in profile is detected
+If you keep records in a spreadsheet use these column names and the matching built-in profile is detected
 automatically. Dates are ISO 8601 (`2026-10-01` or `2026-10-01T06:00:00Z`). Distances are metres, durations
 seconds and weights kilograms. Leave a cell blank for a value you don't have.
 
@@ -105,8 +107,15 @@ Required: `tested_on`.
 ## Exporting from common platforms
 
 - **Strava:** Settings → My Account → Download or Delete Your Account → Request your archive. Import the whole
-  zip with `minou-sync import-strava <zip>` to keep every column and original file, or import just the
-  `activities.csv` with `minou-sync import activities.csv --source strava`.
+  zip with `minou-sync import-strava <zip>` to keep every column and original file. To import only the
+  `activities.csv` use `minou-sync import activities.csv --source strava`.
+- **COROS:** sign in to [COROS Training Hub](https://training.coros.com) on a computer. Open the Activity List
+  tab and choose Export Data. Pick FIT and enter your email address. COROS emails you the files. Import the zip
+  or the unpacked folder with `minou-sync import <path> --source coros`, then run `minou-sync reconcile`. A
+  workout COROS also sent to Strava or Garmin is merged with that copy. The import only reads the files on your
+  computer. It sends no requests to COROS so no COROS limit applies to it. COROS sleep and daily health data
+  aren't in this export. COROS sends them only on request through support and minou-sync doesn't read them
+  yet.
 - **intervals.icu:** the activity and wellness pages offer CSV downloads. Import each with `--source intervals`.
 - **Other platforms:** export whatever CSV or original files they offer and import the file or folder. If the
-  columns don't match a built-in profile, write a short profile (above) and pass it with `--profile`.
+  columns don't match a built-in profile write a short profile (above) and pass it with `--profile`.

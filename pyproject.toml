@@ -7,6 +7,8 @@ name = "minou-sync"
 version = "0.1.0"
 description = "Your Garmin and Strava history and daily Garmin wellness in one local SQLite archive, with an MCP server for agents"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 authors = [{ name = "Andrew Pham" }]
 keywords = ["garmin", "garmin-connect", "strava", "fit", "sqlite", "mcp", "training", "wellness"]
